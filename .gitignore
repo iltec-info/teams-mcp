@@ -1,0 +1,13 @@
+bin/
+*.exe
+*.exe~
+
+# real per-deployment identifiers — copy config.go.example to config.go
+internal/config/config.go
+
+# generated certs (public-key-only, but no reason to track build output)
+*.cer
+*.pem
+
+# go
+*.test

@@ -1,0 +1,33 @@
+// Copy this file to config.go and fill in your own deployment's values.
+// config.go is gitignored — never commit real tenant/org identifiers here.
+package config
+
+const (
+	// TenantID is your Azure AD tenant ID (az account show --query tenantId).
+	TenantID = "REPLACE_ME"
+
+	// PublicClientID is the app registration used for interactive device-code
+	// sign-in (delegated permissions, tenant-wide admin consent granted once).
+	// See README for the permissions this app needs.
+	PublicClientID = "REPLACE_ME"
+
+	// TeamID/ChannelID identify the Teams channel the sync job reads its
+	// digest from (Team ID and Channel ID, both from the list_teams /
+	// list_channels MCP tools or Microsoft Graph).
+	TeamID    = "REPLACE_ME"
+	ChannelID = "REPLACE_ME"
+
+	// TrelloBoardID/TrelloListID identify where extracted tasks are created.
+	TrelloBoardID = "REPLACE_ME"
+	TrelloListID  = "REPLACE_ME"
+
+	// AssigneeFirstName/AssigneeLastName filter which @mentions in the digest
+	// count as "a task for me" — matched as adjacent Teams @mention tags.
+	AssigneeFirstName = "REPLACE_ME"
+	AssigneeLastName  = "REPLACE_ME"
+
+	// ServiceCertThumbprintX5T is printed by cmd/provision-cert after
+	// generating the non-exportable signing key; used for the app-only
+	// (client-credentials) auth path the scheduled sync job uses.
+	ServiceCertThumbprintX5T = "REPLACE_ME"
+)
