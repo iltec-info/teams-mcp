@@ -145,3 +145,31 @@ func (c *Client) SendChannelMessage(ctx context.Context, teamID, channelID, text
 	_, err := c.do(ctx, http.MethodPost, baseURL+path, body)
 	return err
 }
+
+// Chat is a 1:1 or group chat (as opposed to a Team channel).
+type Chat struct {
+	ID         string `json:"id"`
+	Topic      string `json:"topic"`
+	ChatType   string `json:"chatType"` // "oneOnOne", "group", "meeting"
+	Members    []struct {
+		DisplayName string `json:"displayName"`
+	} `json:"members"`
+}
+
+func (c *Client) ListChats(ctx context.Context) ([]Chat, error) {
+	return fetchAllPages[Chat](ctx, c, "/me/chats?$expand=members")
+}
+
+func (c *Client) ReadChatMessages(ctx context.Context, chatID string) ([]Message, error) {
+	path := fmt.Sprintf("/chats/%s/messages", url.PathEscape(chatID))
+	return fetchAllPages[Message](ctx, c, path)
+}
+
+func (c *Client) SendChatMessage(ctx context.Context, chatID, text string) error {
+	path := fmt.Sprintf("/chats/%s/messages", url.PathEscape(chatID))
+	body := map[string]any{
+		"body": map[string]string{"content": text},
+	}
+	_, err := c.do(ctx, http.MethodPost, baseURL+path, body)
+	return err
+}

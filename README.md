@@ -6,8 +6,8 @@ and syncs them to a Trello board as cards (deduped against the whole board).
 
 ## Layout
 
-- `main.go` — full MCP server (`list_teams`, `list_channels`, `read_channel`, `send_message`),
-  stdio transport, delegated device-code auth.
+- `main.go` — full MCP server (`list_teams`, `list_channels`, `read_channel`, `list_chats`,
+  `read_chat`, `send_message`), stdio transport, delegated device-code auth.
 - `cmd/teams-mcp-readonly` — same server without `send_message`, for sharing with colleagues.
 - `cmd/sync` — the scheduled Teams-digest-to-Trello sync job. Uses app-only (client-credentials,
   certificate-based) auth instead of device-code, since it runs unattended.

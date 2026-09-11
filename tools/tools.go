@@ -34,6 +34,15 @@ func Register(s *server.MCPServer, client *graph.Client, readOnly bool) {
 		mcp.WithString("channel_id", mcp.Required(), mcp.Description("Channel ID within the team")),
 	), readChannelHandler(client))
 
+	s.AddTool(mcp.NewTool("list_chats",
+		mcp.WithDescription("List the signed-in user's 1:1 and group Teams chats (not channels)"),
+	), listChatsHandler(client))
+
+	s.AddTool(mcp.NewTool("read_chat",
+		mcp.WithDescription("Read recent messages from a 1:1 or group Teams chat"),
+		mcp.WithString("chat_id", mcp.Required(), mcp.Description("Chat ID, from list_chats")),
+	), readChatHandler(client))
+
 	if readOnly {
 		return
 	}
@@ -102,19 +111,66 @@ func readChannelHandler(client *graph.Client) func(context.Context, mcp.CallTool
 		if err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
-		if len(messages) == 0 {
-			return mcp.NewToolResultText("no messages found"), nil
-		}
-		var b strings.Builder
-		for _, m := range messages {
-			fmt.Fprintf(&b, "[%s] %s: %s\n", m.CreatedDateTime, m.From.User.DisplayName, m.Body.Content)
-			for _, mn := range m.Mentions {
-				if mn.Mentioned.User.DisplayName != "" {
-					fmt.Fprintf(&b, "    @mentions: %s\n", mn.Mentioned.User.DisplayName)
-				}
+		return mcp.NewToolResultText(formatMessages(messages)), nil
+	}
+}
+
+func formatMessages(messages []graph.Message) string {
+	if len(messages) == 0 {
+		return "no messages found"
+	}
+	var b strings.Builder
+	for _, m := range messages {
+		fmt.Fprintf(&b, "[%s] %s: %s\n", m.CreatedDateTime, m.From.User.DisplayName, m.Body.Content)
+		for _, mn := range m.Mentions {
+			if mn.Mentioned.User.DisplayName != "" {
+				fmt.Fprintf(&b, "    @mentions: %s\n", mn.Mentioned.User.DisplayName)
 			}
 		}
+	}
+	return b.String()
+}
+
+func listChatsHandler(client *graph.Client) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	return func(ctx context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		chats, err := client.ListChats(ctx)
+		audit.Log(auditPrincipal, "graph.list_chats", "/me/chats", err)
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		if len(chats) == 0 {
+			return mcp.NewToolResultText("no chats found"), nil
+		}
+		var b strings.Builder
+		for _, c := range chats {
+			label := c.Topic
+			if label == "" {
+				names := make([]string, 0, len(c.Members))
+				for _, m := range c.Members {
+					if m.DisplayName != "" {
+						names = append(names, m.DisplayName)
+					}
+				}
+				label = strings.Join(names, ", ")
+			}
+			fmt.Fprintf(&b, "%s\t[%s] %s\n", c.ID, c.ChatType, label)
+		}
 		return mcp.NewToolResultText(b.String()), nil
+	}
+}
+
+func readChatHandler(client *graph.Client) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		chatID, err := req.RequireString("chat_id")
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		messages, err := client.ReadChatMessages(ctx, chatID)
+		audit.Log(auditPrincipal, "graph.read_chat", chatID, err)
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		return mcp.NewToolResultText(formatMessages(messages)), nil
 	}
 }
 
