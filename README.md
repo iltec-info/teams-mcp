@@ -9,8 +9,11 @@ and syncs them to a Trello board as cards (deduped against the whole board).
 - `main.go` — full MCP server (`list_teams`, `list_channels`, `read_channel`, `list_chats`,
   `read_chat`, `send_message`), stdio transport, delegated device-code auth. `read_chat` and
   `read_channel` accept optional `since` (`today`, `week`, `month`, `YYYY-MM-DD`, or RFC3339)
-  and `limit` (newest-first cap), applied server-side via Graph `$filter`/`$top` on
-  `lastModifiedDateTime`, so a "today only" read is one cheap call instead of the full history.
+  and `limit` (newest-first cap). For `read_chat` these push down to Graph as
+  `$filter`/`$orderby`/`$top` on `lastModifiedDateTime`, so a "today only" read is one cheap
+  call instead of the full history. Channel message lists accept only `$top`/`$expand`, so
+  `read_channel` still fetches every page and applies `since` client-side — the output shrinks,
+  the fetch doesn't.
 - `cmd/teams-mcp-readonly` — same server without `send_message`, for sharing with colleagues.
 - `cmd/sync` — the scheduled Teams-digest-to-Trello sync job. Uses app-only (client-credentials,
   certificate-based) auth instead of device-code, since it runs unattended.

@@ -20,6 +20,9 @@ const (
 		`"week" (Monday 00:00 local), "month" (1st of the month 00:00 local), a date YYYY-MM-DD (local midnight), ` +
 		`or an RFC3339 timestamp. Omit for the full history.`
 	limitDescription = "Maximum number of messages to return, newest first. Omit for no cap."
+	// Graph honours date filters only on chat message lists, so read_channel
+	// trims after fetching rather than narrowing the request itself.
+	channelFilterNote = " Note: channel reads are filtered after fetching, so this trims the result but not the request."
 )
 
 // parseSince resolves a `since` argument against now, in now's location.
@@ -77,7 +80,7 @@ func Register(s *server.MCPServer, client *graph.Client, readOnly bool) {
 		mcp.WithDescription("Read recent messages from a Microsoft Teams channel, newest first"),
 		mcp.WithString("team_id", mcp.Required(), mcp.Description("Team ID, from list_teams")),
 		mcp.WithString("channel_id", mcp.Required(), mcp.Description("Channel ID within the team")),
-		mcp.WithString("since", mcp.Description(sinceDescription)),
+		mcp.WithString("since", mcp.Description(sinceDescription+channelFilterNote)),
 		mcp.WithNumber("limit", mcp.Description(limitDescription)),
 	), readChannelHandler(client))
 

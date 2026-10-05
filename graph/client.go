@@ -123,8 +123,9 @@ type Message struct {
 			DisplayName string `json:"displayName"`
 		} `json:"user"`
 	} `json:"from"`
-	CreatedDateTime string `json:"createdDateTime"`
-	Body            struct {
+	CreatedDateTime      string `json:"createdDateTime"`
+	LastModifiedDateTime string `json:"lastModifiedDateTime"`
+	Body                 struct {
 		Content string `json:"content"`
 	} `json:"body"`
 	Mentions []struct {
@@ -147,40 +148,99 @@ type MessageQuery struct {
 
 const maxGraphPageSize = 50
 
-// query renders the OData query string. lastModifiedDateTime is the one
-// property Graph supports for $filter/$orderby on both chat and channel
-// message lists, and $orderby must name the same property as the $filter.
-func (q MessageQuery) query() string {
+func (q MessageQuery) top() int {
+	if q.Limit > 0 && q.Limit < maxGraphPageSize {
+		return q.Limit
+	}
+	return maxGraphPageSize
+}
+
+// chatQuery renders the OData query string for chat message lists, which
+// support $top (max 50), $orderby and $filter — but only on lastModifiedDateTime
+// or createdDateTime, descending, and Graph ignores a $filter unless $orderby
+// names the same property.
+func (q MessageQuery) chatQuery() string {
 	if q.Since.IsZero() && q.Limit <= 0 {
 		return ""
 	}
-	parts := []string{"$orderby=" + escapeOData("lastModifiedDateTime desc")}
-	top := maxGraphPageSize
-	if q.Limit > 0 && q.Limit < top {
-		top = q.Limit
+	parts := []string{
+		"$orderby=" + escapeOData("lastModifiedDateTime desc"),
+		fmt.Sprintf("$top=%d", q.top()),
 	}
-	parts = append(parts, fmt.Sprintf("$top=%d", top))
 	if !q.Since.IsZero() {
-		filter := "lastModifiedDateTime gt " + q.Since.UTC().Format("2006-01-02T15:04:05Z")
+		filter := "lastModifiedDateTime gt " + formatODataTime(q.Since)
 		parts = append(parts, "$filter="+escapeOData(filter))
 	}
 	return strings.Join(parts, "&")
 }
 
-func withQuery(path string, q MessageQuery) string {
-	if qs := q.query(); qs != "" {
-		return path + "?" + qs
+// channelQuery renders the OData query string for channel message lists, which
+// support only $top and $expand — a $filter or $orderby there is not honoured,
+// so ReadChannelMessages applies Since itself.
+func (q MessageQuery) channelQuery() string {
+	if q.Since.IsZero() && q.Limit <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("$top=%d", q.top())
+}
+
+func withQuery(path, queryString string) string {
+	if queryString != "" {
+		return path + "?" + queryString
 	}
 	return path
+}
+
+func formatODataTime(t time.Time) string {
+	return t.UTC().Format("2006-01-02T15:04:05.000Z")
 }
 
 func escapeOData(s string) string {
 	return strings.ReplaceAll(url.QueryEscape(s), "+", "%20")
 }
 
+// modifiedAt is when the message last changed, falling back to its creation
+// time. ok is false when neither timestamp parses.
+func (m Message) modifiedAt() (t time.Time, ok bool) {
+	for _, s := range []string{m.LastModifiedDateTime, m.CreatedDateTime} {
+		if parsed, err := time.Parse(time.RFC3339, s); err == nil {
+			return parsed, true
+		}
+	}
+	return time.Time{}, false
+}
+
+// filterSince drops messages last modified at or before since. Messages with an
+// unparseable timestamp are kept rather than silently discarded.
+func filterSince(messages []Message, since time.Time) []Message {
+	kept := make([]Message, 0, len(messages))
+	for _, m := range messages {
+		if t, ok := m.modifiedAt(); ok && !t.After(since) {
+			continue
+		}
+		kept = append(kept, m)
+	}
+	return kept
+}
+
 func (c *Client) ReadChannelMessages(ctx context.Context, teamID, channelID string, q MessageQuery) ([]Message, error) {
-	path := withQuery(fmt.Sprintf("/teams/%s/channels/%s/messages", url.PathEscape(teamID), url.PathEscape(channelID)), q)
-	return fetchAllPages[Message](ctx, c, path, q.Limit)
+	path := withQuery(fmt.Sprintf("/teams/%s/channels/%s/messages", url.PathEscape(teamID), url.PathEscape(channelID)), q.channelQuery())
+	if q.Since.IsZero() {
+		return fetchAllPages[Message](ctx, c, path, q.Limit)
+	}
+
+	// Every page has to be fetched before filtering: Graph orders channel
+	// messages by the whole reply chain's last-modified time, not each
+	// message's own, so an older message can still follow a newer one.
+	all, err := fetchAllPages[Message](ctx, c, path, 0)
+	if err != nil {
+		return nil, err
+	}
+	kept := filterSince(all, q.Since)
+	if q.Limit > 0 && len(kept) > q.Limit {
+		kept = kept[:q.Limit]
+	}
+	return kept, nil
 }
 
 func (c *Client) SendChannelMessage(ctx context.Context, teamID, channelID, text string) error {
@@ -207,7 +267,7 @@ func (c *Client) ListChats(ctx context.Context) ([]Chat, error) {
 }
 
 func (c *Client) ReadChatMessages(ctx context.Context, chatID string, q MessageQuery) ([]Message, error) {
-	path := withQuery(fmt.Sprintf("/chats/%s/messages", url.PathEscape(chatID)), q)
+	path := withQuery(fmt.Sprintf("/chats/%s/messages", url.PathEscape(chatID)), q.chatQuery())
 	return fetchAllPages[Message](ctx, c, path, q.Limit)
 }
 
