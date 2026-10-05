@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -13,6 +14,50 @@ import (
 )
 
 const auditPrincipal = "delegated:device-code"
+
+const (
+	sinceDescription = `Only return messages created or edited after this point. Accepts "today" (local midnight), ` +
+		`"week" (Monday 00:00 local), "month" (1st of the month 00:00 local), a date YYYY-MM-DD (local midnight), ` +
+		`or an RFC3339 timestamp. Omit for the full history.`
+	limitDescription = "Maximum number of messages to return, newest first. Omit for no cap."
+)
+
+// parseSince resolves a `since` argument against now, in now's location.
+func parseSince(s string, now time.Time) (time.Time, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return time.Time{}, nil
+	}
+	midnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	switch strings.ToLower(s) {
+	case "today":
+		return midnight, nil
+	case "week":
+		daysSinceMonday := (int(now.Weekday()) + 6) % 7
+		return midnight.AddDate(0, 0, -daysSinceMonday), nil
+	case "month":
+		return time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location()), nil
+	}
+	if t, err := time.ParseInLocation("2006-01-02", s, now.Location()); err == nil {
+		return t, nil
+	}
+	if t, err := time.Parse(time.RFC3339, s); err == nil {
+		return t, nil
+	}
+	return time.Time{}, fmt.Errorf(`invalid since %q: use "today", "week", "month", YYYY-MM-DD or RFC3339`, s)
+}
+
+func messageQuery(req mcp.CallToolRequest, now time.Time) (graph.MessageQuery, error) {
+	since, err := parseSince(req.GetString("since", ""), now)
+	if err != nil {
+		return graph.MessageQuery{}, err
+	}
+	limit := req.GetInt("limit", 0)
+	if limit < 0 {
+		return graph.MessageQuery{}, fmt.Errorf("invalid limit %d: must be >= 0", limit)
+	}
+	return graph.MessageQuery{Since: since, Limit: limit}, nil
+}
 
 // Register wires up the MCP tools. When readOnly is true, send_message is
 // omitted entirely — decided at compile time (via separate cmd/ binaries)
@@ -29,9 +74,11 @@ func Register(s *server.MCPServer, client *graph.Client, readOnly bool) {
 	), listChannelsHandler(client))
 
 	s.AddTool(mcp.NewTool("read_channel",
-		mcp.WithDescription("Read recent messages from a Microsoft Teams channel"),
+		mcp.WithDescription("Read recent messages from a Microsoft Teams channel, newest first"),
 		mcp.WithString("team_id", mcp.Required(), mcp.Description("Team ID, from list_teams")),
 		mcp.WithString("channel_id", mcp.Required(), mcp.Description("Channel ID within the team")),
+		mcp.WithString("since", mcp.Description(sinceDescription)),
+		mcp.WithNumber("limit", mcp.Description(limitDescription)),
 	), readChannelHandler(client))
 
 	s.AddTool(mcp.NewTool("list_chats",
@@ -39,8 +86,10 @@ func Register(s *server.MCPServer, client *graph.Client, readOnly bool) {
 	), listChatsHandler(client))
 
 	s.AddTool(mcp.NewTool("read_chat",
-		mcp.WithDescription("Read recent messages from a 1:1 or group Teams chat"),
+		mcp.WithDescription("Read recent messages from a 1:1 or group Teams chat, newest first"),
 		mcp.WithString("chat_id", mcp.Required(), mcp.Description("Chat ID, from list_chats")),
+		mcp.WithString("since", mcp.Description(sinceDescription)),
+		mcp.WithNumber("limit", mcp.Description(limitDescription)),
 	), readChatHandler(client))
 
 	if readOnly {
@@ -106,7 +155,12 @@ func readChannelHandler(client *graph.Client) func(context.Context, mcp.CallTool
 			return mcp.NewToolResultError(err.Error()), nil
 		}
 
-		messages, err := client.ReadChannelMessages(ctx, teamID, channelID)
+		q, err := messageQuery(req, time.Now())
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+
+		messages, err := client.ReadChannelMessages(ctx, teamID, channelID, q)
 		audit.Log(auditPrincipal, "graph.read_channel", teamID+"/"+channelID, err)
 		if err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
@@ -165,7 +219,11 @@ func readChatHandler(client *graph.Client) func(context.Context, mcp.CallToolReq
 		if err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
-		messages, err := client.ReadChatMessages(ctx, chatID)
+		q, err := messageQuery(req, time.Now())
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		messages, err := client.ReadChatMessages(ctx, chatID, q)
 		audit.Log(auditPrincipal, "graph.read_chat", chatID, err)
 		if err != nil {
 			return mcp.NewToolResultError(err.Error()), nil

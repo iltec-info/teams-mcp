@@ -187,7 +187,7 @@ func main() {
 	}
 	client := graph.NewClient(func(context.Context) (string, error) { return token, nil })
 
-	messages, err := client.ReadChannelMessages(ctx, teamID, channelID)
+	messages, err := client.ReadChannelMessages(ctx, teamID, channelID, graph.MessageQuery{})
 	audit.Log(principal, "graph.read_channel", teamID+"/"+channelID, err)
 	if err != nil {
 		log.Fatalf("read channel: %v", err)

@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 )
 
@@ -73,8 +74,9 @@ type pagedResponse[T any] struct {
 }
 
 // fetchAllPages GETs path and follows @odata.nextLink until Graph stops
-// returning one, accumulating every page's items.
-func fetchAllPages[T any](ctx context.Context, c *Client, path string) ([]T, error) {
+// returning one, accumulating every page's items. When limit > 0 it stops
+// paging as soon as limit items are collected and truncates to limit.
+func fetchAllPages[T any](ctx context.Context, c *Client, path string, limit int) ([]T, error) {
 	var all []T
 	next := baseURL + path
 	for next != "" {
@@ -87,6 +89,9 @@ func fetchAllPages[T any](ctx context.Context, c *Client, path string) ([]T, err
 			return nil, err
 		}
 		all = append(all, page.Value...)
+		if limit > 0 && len(all) >= limit {
+			return all[:limit], nil
+		}
 		next = page.NextLink
 	}
 	return all, nil
@@ -98,7 +103,7 @@ type Team struct {
 }
 
 func (c *Client) ListJoinedTeams(ctx context.Context) ([]Team, error) {
-	return fetchAllPages[Team](ctx, c, "/me/joinedTeams")
+	return fetchAllPages[Team](ctx, c, "/me/joinedTeams", 0)
 }
 
 type Channel struct {
@@ -108,7 +113,7 @@ type Channel struct {
 
 func (c *Client) ListChannels(ctx context.Context, teamID string) ([]Channel, error) {
 	path := fmt.Sprintf("/teams/%s/channels", url.PathEscape(teamID))
-	return fetchAllPages[Channel](ctx, c, path)
+	return fetchAllPages[Channel](ctx, c, path, 0)
 }
 
 type Message struct {
@@ -132,9 +137,50 @@ type Message struct {
 	} `json:"mentions"`
 }
 
-func (c *Client) ReadChannelMessages(ctx context.Context, teamID, channelID string) ([]Message, error) {
-	path := fmt.Sprintf("/teams/%s/channels/%s/messages", url.PathEscape(teamID), url.PathEscape(channelID))
-	return fetchAllPages[Message](ctx, c, path)
+// MessageQuery narrows a message listing server-side. The zero value means
+// "everything" and adds no query parameters, so unfiltered callers behave
+// exactly as before.
+type MessageQuery struct {
+	Since time.Time // only messages created or edited after this instant; zero = no lower bound
+	Limit int       // max messages returned, newest first; 0 = no cap
+}
+
+const maxGraphPageSize = 50
+
+// query renders the OData query string. lastModifiedDateTime is the one
+// property Graph supports for $filter/$orderby on both chat and channel
+// message lists, and $orderby must name the same property as the $filter.
+func (q MessageQuery) query() string {
+	if q.Since.IsZero() && q.Limit <= 0 {
+		return ""
+	}
+	parts := []string{"$orderby=" + escapeOData("lastModifiedDateTime desc")}
+	top := maxGraphPageSize
+	if q.Limit > 0 && q.Limit < top {
+		top = q.Limit
+	}
+	parts = append(parts, fmt.Sprintf("$top=%d", top))
+	if !q.Since.IsZero() {
+		filter := "lastModifiedDateTime gt " + q.Since.UTC().Format("2006-01-02T15:04:05Z")
+		parts = append(parts, "$filter="+escapeOData(filter))
+	}
+	return strings.Join(parts, "&")
+}
+
+func withQuery(path string, q MessageQuery) string {
+	if qs := q.query(); qs != "" {
+		return path + "?" + qs
+	}
+	return path
+}
+
+func escapeOData(s string) string {
+	return strings.ReplaceAll(url.QueryEscape(s), "+", "%20")
+}
+
+func (c *Client) ReadChannelMessages(ctx context.Context, teamID, channelID string, q MessageQuery) ([]Message, error) {
+	path := withQuery(fmt.Sprintf("/teams/%s/channels/%s/messages", url.PathEscape(teamID), url.PathEscape(channelID)), q)
+	return fetchAllPages[Message](ctx, c, path, q.Limit)
 }
 
 func (c *Client) SendChannelMessage(ctx context.Context, teamID, channelID, text string) error {
@@ -157,12 +203,12 @@ type Chat struct {
 }
 
 func (c *Client) ListChats(ctx context.Context) ([]Chat, error) {
-	return fetchAllPages[Chat](ctx, c, "/me/chats?$expand=members")
+	return fetchAllPages[Chat](ctx, c, "/me/chats?$expand=members", 0)
 }
 
-func (c *Client) ReadChatMessages(ctx context.Context, chatID string) ([]Message, error) {
-	path := fmt.Sprintf("/chats/%s/messages", url.PathEscape(chatID))
-	return fetchAllPages[Message](ctx, c, path)
+func (c *Client) ReadChatMessages(ctx context.Context, chatID string, q MessageQuery) ([]Message, error) {
+	path := withQuery(fmt.Sprintf("/chats/%s/messages", url.PathEscape(chatID)), q)
+	return fetchAllPages[Message](ctx, c, path, q.Limit)
 }
 
 func (c *Client) SendChatMessage(ctx context.Context, chatID, text string) error {
