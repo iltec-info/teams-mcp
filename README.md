@@ -20,9 +20,14 @@ and syncs them to a Trello board as cards (deduped against the whole board).
 - `cmd/trello-mcp` + `trello/` — stdio MCP server for Trello (free plan is enough; REST API v1).
   Tools: `list_boards`, `list_lists`, `list_labels`, `list_cards`, `get_card`, `create_card`,
   `update_card` (name/desc/due/labels/move/archive), `archive_card`, `add_comment`,
-  `add_checklist`, `set_check_item`. No hard delete — archive is reversible. Reads the same
-  `~/.trello_creds` as `cmd/sync` and sends it in the `Authorization` header (never in the URL).
-  Build: `go build -o bin/trello-mcp.exe ./cmd/trello-mcp`.
+  `add_checklist`, `set_check_item`. No hard delete — archive is reversible. Reads the Trello
+  key/token from the OS secret store (same entries as `cmd/sync`) and sends them in the
+  `Authorization` header (never in the URL). Build: `go build -o bin/trello-mcp.exe ./cmd/trello-mcp`.
+- `secrets/` + `cmd/credstore` — credentials live in the OS secret store (Windows Credential
+  Manager, DPAPI per-user; Keychain / Secret Service elsewhere), never in files: the Trello
+  key+token and the MSAL (Teams) refresh-token cache. `credstore status` shows what is stored
+  (sizes only), `credstore set-trello` reads key/token from stdin, `credstore import` moves the
+  legacy `~/.trello_creds` / `token_cache.json` into the store and shreds the files.
 - `cmd/provision-cert` — one-time tool that generates a non-exportable RSA key directly inside
   the Windows CNG certificate store (Microsoft Software Key Storage Provider) and self-signs a
   certificate for it, for the sync job's app-only auth. The private key never exists as a file.
@@ -51,10 +56,12 @@ and syncs them to a Trello board as cards (deduped against the whole board).
    to filter on.
 4. `go build -o bin/provision-cert.exe ./cmd/provision-cert && ./bin/provision-cert.exe` once,
    to generate the sync job's signing key + cert.
-5. Create `~/.teams_service_identity` (service app's client ID on line 1, tenant ID on line 2)
-   and `~/.trello_creds` (Trello API key on line 1, token on line 2) — kept as local files, not
-   env vars, since env vars set via `setx` don't reliably reach either the MCP host's pooled
-   subprocess or a Windows Task Scheduler job (both cache a stale environment snapshot).
+5. Create `~/.teams_service_identity` (service app's client ID on line 1, tenant ID on line 2 —
+   identifiers only, no secret) and load the Trello credentials into the OS secret store:
+   `go build -o bin/credstore.exe ./cmd/credstore` then
+   `printf '%s\n%s\n' "$KEY" "$TOKEN" | ./bin/credstore.exe set-trello`. Not env vars: `setx`
+   values don't reliably reach the MCP host's pooled subprocess or a Task Scheduler job (both
+   cache a stale environment snapshot), whereas the secret store is read at call time.
 6. `go build -o bin/teams-mcp.exe .` and register it as an MCP server (stdio transport) in your
    Claude Code config.
 7. `go build -o bin/teams-trello-sync.exe ./cmd/sync`, then schedule it (Task Scheduler, cron,

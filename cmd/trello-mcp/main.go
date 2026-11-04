@@ -1,6 +1,6 @@
 // trello-mcp: MCP server (stdio) exposing Trello boards, lists, cards,
 // comments and checklists as tools. Credentials are read from
-// ~/.trello_creds (API key on line 1, token on line 2).
+// the OS secret store (Windows Credential Manager); see cmd/credstore.
 package main
 
 import (
@@ -12,7 +12,7 @@ import (
 )
 
 func main() {
-	client, err := trello.NewClientFromFile()
+	client, err := trello.NewClientFromStore()
 	if err != nil {
 		log.Fatal(err)
 	}

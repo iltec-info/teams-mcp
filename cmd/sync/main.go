@@ -9,8 +9,6 @@ import (
 	"log"
 	"net/http"
 	"net/url"
-	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -18,6 +16,7 @@ import (
 	"teams-mcp/authapp"
 	"teams-mcp/graph"
 	"teams-mcp/internal/config"
+	"teams-mcp/secrets"
 )
 
 // Fixed targets: the Teams digest channel this was built for, and the
@@ -32,26 +31,21 @@ const (
 	trelloListID = config.TrelloListID
 )
 
-// Trello credentials are read from a local file rather than env vars:
-// Task Scheduler (a long-running service) caches a stale user-env snapshot
-// from logon time and doesn't reliably forward newly-set env vars to
-// triggered tasks, the same class of bug hit with the MCP host's env.
+// Trello credentials come from the OS secret store (Windows Credential
+// Manager), not env vars (Task Scheduler caches a stale logon-time env
+// snapshot) and not files. Load them once with cmd/credstore.
 var trelloKey, trelloToken = readTrelloCreds()
 
 func readTrelloCreds() (string, string) {
-	home, err := os.UserHomeDir()
+	k, err := secrets.Get(secrets.TrelloKey)
 	if err != nil {
 		return "", ""
 	}
-	data, err := os.ReadFile(filepath.Join(home, ".trello_creds"))
+	t, err := secrets.Get(secrets.TrelloToken)
 	if err != nil {
 		return "", ""
 	}
-	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
-	if len(lines) < 2 {
-		return "", ""
-	}
-	return strings.TrimSpace(lines[0]), strings.TrimSpace(lines[1])
+	return strings.TrimSpace(k), strings.TrimSpace(t)
 }
 
 // Assignee to filter tasks by, as the two @mention tag texts Teams renders
@@ -173,7 +167,7 @@ func createCard(name string) error {
 
 func main() {
 	if trelloKey == "" || trelloToken == "" {
-		log.Fatal("~/.trello_creds must exist with key on line 1, token on line 2")
+		log.Fatal("Trello key/token missing from the OS secret store; run cmd/credstore")
 	}
 	principal, err := authapp.ClientID()
 	if err != nil {

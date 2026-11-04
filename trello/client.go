@@ -1,8 +1,7 @@
 // Package trello is a thin Trello REST v1 client plus the MCP tool surface
-// built on it. Credentials come from ~/.trello_creds (API key on line 1,
-// token on line 2) — the same file cmd/sync uses — and are sent in the
-// Authorization header, never in the URL, so they cannot leak into error
-// strings or logs.
+// built on it. Credentials come from the OS secret store (package secrets),
+// never from a file, and are sent in the Authorization header, never in the
+// URL, so they cannot leak into error strings or logs.
 package trello
 
 import (
@@ -13,10 +12,10 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
+
+	"teams-mcp/secrets"
 )
 
 const baseURL = "https://api.trello.com/1"
@@ -30,21 +29,18 @@ func NewClient(key, token string) *Client {
 	return &Client{key: key, token: token, http: &http.Client{Timeout: 30 * time.Second}}
 }
 
-// NewClientFromFile reads ~/.trello_creds (key on line 1, token on line 2).
-func NewClientFromFile() (*Client, error) {
-	home, err := os.UserHomeDir()
+// NewClientFromStore reads the API key and token from the OS secret store
+// (see package secrets; load them with `credstore import` or `credstore set-trello`).
+func NewClientFromStore() (*Client, error) {
+	key, err := secrets.Get(secrets.TrelloKey)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("trello key not in OS secret store (run credstore): %w", err)
 	}
-	data, err := os.ReadFile(filepath.Join(home, ".trello_creds"))
+	token, err := secrets.Get(secrets.TrelloToken)
 	if err != nil {
-		return nil, fmt.Errorf("read ~/.trello_creds: %w", err)
+		return nil, fmt.Errorf("trello token not in OS secret store (run credstore): %w", err)
 	}
-	lines := strings.Split(strings.ReplaceAll(string(data), "\r", ""), "\n")
-	if len(lines) < 2 || strings.TrimSpace(lines[0]) == "" || strings.TrimSpace(lines[1]) == "" {
-		return nil, errors.New("~/.trello_creds must contain the API key on line 1 and the token on line 2")
-	}
-	return NewClient(strings.TrimSpace(lines[0]), strings.TrimSpace(lines[1])), nil
+	return NewClient(strings.TrimSpace(key), strings.TrimSpace(token)), nil
 }
 
 // do performs one request. Parameters travel in the query string (Trello
