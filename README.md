@@ -17,6 +17,12 @@ and syncs them to a Trello board as cards (deduped against the whole board).
 - `cmd/teams-mcp-readonly` — same server without `send_message`, for sharing with colleagues.
 - `cmd/sync` — the scheduled Teams-digest-to-Trello sync job. Uses app-only (client-credentials,
   certificate-based) auth instead of device-code, since it runs unattended.
+- `cmd/trello-mcp` + `trello/` — stdio MCP server for Trello (free plan is enough; REST API v1).
+  Tools: `list_boards`, `list_lists`, `list_labels`, `list_cards`, `get_card`, `create_card`,
+  `update_card` (name/desc/due/labels/move/archive), `archive_card`, `add_comment`,
+  `add_checklist`, `set_check_item`. No hard delete — archive is reversible. Reads the same
+  `~/.trello_creds` as `cmd/sync` and sends it in the `Authorization` header (never in the URL).
+  Build: `go build -o bin/trello-mcp.exe ./cmd/trello-mcp`.
 - `cmd/provision-cert` — one-time tool that generates a non-exportable RSA key directly inside
   the Windows CNG certificate store (Microsoft Software Key Storage Provider) and self-signs a
   certificate for it, for the sync job's app-only auth. The private key never exists as a file.
