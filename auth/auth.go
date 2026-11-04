@@ -2,14 +2,15 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 
 	"github.com/AzureAD/microsoft-authentication-library-for-go/apps/cache"
 	"github.com/AzureAD/microsoft-authentication-library-for-go/apps/public"
 
 	"teams-mcp/internal/config"
+	"teams-mcp/secrets"
 )
 
 var scopes = []string{
@@ -28,45 +29,32 @@ const (
 	defaultTenantID = config.TenantID
 )
 
-// diskCache persists the MSAL token cache to a file so the device-code
-// flow only has to run once; subsequent runs refresh silently.
-type diskCache struct {
-	path string
-}
+// storeCache persists the MSAL token cache in the OS secret store so the
+// device-code flow only has to run once; subsequent runs refresh silently.
+// The cache holds a refresh token, so it never touches the filesystem.
+type storeCache struct{}
 
-func (d *diskCache) Export(_ context.Context, c cache.Marshaler, _ cache.ExportHints) error {
+func (storeCache) Export(_ context.Context, c cache.Marshaler, _ cache.ExportHints) error {
 	data, err := c.Marshal()
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(d.path, data, 0600)
+	return secrets.Set(secrets.MSALCache, string(data))
 }
 
-func (d *diskCache) Replace(_ context.Context, c cache.Unmarshaler, _ cache.ReplaceHints) error {
-	data, err := os.ReadFile(d.path)
+func (storeCache) Replace(_ context.Context, c cache.Unmarshaler, _ cache.ReplaceHints) error {
+	data, err := secrets.Get(secrets.MSALCache)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, secrets.ErrNotFound) {
 			return nil
 		}
 		return err
 	}
-	return c.Unmarshal(data)
-}
-
-func cachePath() (string, error) {
-	dir, err := os.UserConfigDir()
-	if err != nil {
-		return "", err
-	}
-	d := filepath.Join(dir, "teams-mcp")
-	if err := os.MkdirAll(d, 0700); err != nil {
-		return "", err
-	}
-	return filepath.Join(d, "token_cache.json"), nil
+	return c.Unmarshal([]byte(data))
 }
 
 // GetToken returns a valid Graph access token, refreshing silently from the
-// disk cache when possible and falling back to an interactive device-code
+// secret-store cache when possible and falling back to an interactive device-code
 // login (printed to stderr) on first run or after the refresh token expires.
 // clientID/tenantID, when non-empty, override the baked-in defaults; there
 // is no env var fallback — env vars proved unreliable across both the MCP
@@ -80,12 +68,7 @@ func GetToken(ctx context.Context, clientID, tenantID string) (string, error) {
 	}
 	authority := fmt.Sprintf("https://login.microsoftonline.com/%s", tenantID)
 
-	cp, err := cachePath()
-	if err != nil {
-		return "", err
-	}
-
-	app, err := public.New(clientID, public.WithAuthority(authority), public.WithCache(&diskCache{path: cp}))
+	app, err := public.New(clientID, public.WithAuthority(authority), public.WithCache(storeCache{}))
 	if err != nil {
 		return "", err
 	}
